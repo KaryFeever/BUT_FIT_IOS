@@ -1,1 +1,1 @@
-# BUT_FIT_IOS
+# Log Analyzer from stock trading
