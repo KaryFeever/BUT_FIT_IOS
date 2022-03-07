@@ -1,0 +1,337 @@
+#!/bin/bash
+
+export POSIXLY_CORRECT=yes
+export LC_NUMERIC="en_US.UTF-8"
+
+print_help() {
+  echo "Usage: tradelog [-h|--help] [FILTER...] [COMMAND] [LOG [LOG2 [...]]"
+  echo "tradelog-Log Analyzer from stock trading"
+  echo ""
+  echo "COMMAND  can be one of:"
+  echo ""
+  echo "   list-tick     listing a list of occurring stock symbols, the so-called tickers"
+  echo ""
+  echo "   profit        an extract of the total profit from closed positions"
+  echo ""
+  echo "   pos           list of values of currently held positions sorted in descending order of value"
+  echo ""
+  echo "   last-price    listing the last known price for each ticker"
+  echo ""
+  echo "   hist-ord      extract the histogram of the number of transactions according to the ticker"
+  echo ""
+  echo "   graph–pos     print the chart of the values of the held positions according to the ticker"
+  echo ""
+  echo "FILTER  it can be a combination of the following:"
+  echo ""
+  echo "   -a DATETIME   after: only records after this date (without this date) are considered."
+  echo "                 DateTime is of the yyyy-MM-dd HH: mm: ss format"
+  echo ""
+  echo "   -b DATETIME   before: only records before this date are considered (without this date)"
+  echo ""
+  echo "   -t TICKER     only entries corresponding to a given ticker are considered."
+  echo "                 For multiple instances of the switch, the set of all listed tickers is taken."
+  echo ""
+  echo "   -w WIDTH      for listing graphs, it sets their width, that is, the length of the longest line to WIDTH."
+  echo "                 Thus, WIDTH must be a positive integer. Multiple occurrences of the Switch is a false start."
+}
+# Variables
+TICKER=""
+COMMAND=""
+DATETIME_A=""
+DATETIME_B=""
+WIDTH=""
+FILES=""
+FILES_GZ=""
+# Flags
+TICKER_FLAG=0
+COMMAND_FLAG=0
+DATETIME_A_FLAG=0
+DATETIME_B_FLAG=0
+WIDTH_FLAG=0
+FILES_FLAG=00
+# get arguments
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -h | --help)
+    print_help
+    exit 0
+    ;;
+  -t)
+    if [ -z "$2" ] || [[ $2 =~ ^-[a-z] ]] || [[ $2 =~ [*.*] ]] || [[ $2 =~ [*.gz] ]] || [ "$2" == "list-tick" ] || [ "$2" == "profit" ] ||
+      [ "$2" == "pos" ] || [ "$2" == "last-price" ] || [ "$2" == "hist-ord" ] || [ "$2" == "graph-pos" ]; then
+      echo "ERROR: FILTER -t requires an argument"
+      exit 1
+    fi
+    if [[ $2 =~ [*\;*] ]] || [[ $2 =~ [*\ *] ]]; then
+      echo "ERROR: FILTER -t requires a string without ; and space"
+      exit 1
+    else
+      TICKER="$2/$TICKER"
+      TICKER_FLAG=1
+    fi
+    shift
+    shift
+    ;;
+  -w)
+    if [ -z "$2" ] || [[ $2 =~ ^-[a-z] ]] || [[ $2 =~ [*.*] ]] || [[ $2 =~ [*.gz] ]] || [ "$2" == "list-tick" ] || [ "$2" == "profit" ] ||
+      [ "$2" == "pos" ] || [ "$2" == "last-price" ] || [ "$2" == "hist-ord" ] || [ "$2" == "graph-pos" ]; then
+      echo "ERROR: FILTER -w requires an argument"
+      exit 1
+    fi
+    if [ "$WIDTH_FLAG" -eq 0 ]; then
+      if [ "$2" -ge 0 ]; then
+        WIDTH="$2"
+        WIDTH_FLAG=1
+      else
+        echo "ERROR: FILTER -w requires a positive number as an argument"
+        exit 1
+      fi
+    else
+      echo "ERROR: FILTER -w must be set only once"
+      exit 1
+    fi
+    shift
+    shift
+    ;;
+  -a)
+    if [ -z "$2" ] || [[ $2 =~ ^-[a-z] ]] || [[ $2 =~ [*.*] ]] || [[ $2 =~ [*.gz] ]] || [ "$2" == "list-tick" ] || [ "$2" == "profit" ] ||
+      [ "$2" == "pos" ] || [ "$2" == "last-price" ] || [ "$2" == "hist-ord" ] || [ "$2" == "graph-pos" ]; then
+      echo "ERROR: FILTER -a requires an argument"
+      exit 1
+    fi
+    if [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+      DATETIME_A="$2"
+      DATETIME_A_FLAG=1
+    else
+      echo "ERROR: -a requires argument with date format 'YYYY-MM-DD HH:MM:SS'"
+      exit 1
+    fi
+    shift
+    shift
+    ;;
+  -b)
+    if [ -z "$2" ] || [[ $2 =~ ^-[a-z] ]] || [[ $2 =~ [*.*] ]] || [[ $2 =~ [*.gz] ]] || [ "$2" == "list-tick" ] || [ "$2" == "profit" ] ||
+      [ "$2" == "pos" ] || [ "$2" == "last-price" ] || [ "$2" == "hist-ord" ] || [ "$2" == "graph-pos" ]; then
+      echo "ERROR: FILTER -b requires an argument"
+      exit 1
+    fi
+    if [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+      DATETIME_B="$2"
+      DATETIME_B_FLAG=1
+    else
+      echo "ERROR: -b requires argument with date format 'YYYY-MM-DD HH:MM:SS'"
+      exit 1
+    fi
+    shift
+    shift
+    ;;
+  list-tick | profit | pos | last-price | hist-ord | graph-pos)
+    if [ "$COMMAND_FLAG" -eq 0 ]; then
+      COMMAND="$1"
+      COMMAND_FLAG=1
+    else
+      echo "ERROR: COMMAND must be set once"
+      exit 1
+    fi
+    shift
+    ;;
+  *.gz)
+    if [ -r "$1" ]; then
+      FILES_GZ="$1 $FILES_GZ"
+      FILES_FLAG=$((FILES_FLAG | 1))
+    else
+      echo "ERROR: $1 gz file can't be read"
+      exit 1
+    fi
+    shift
+    ;;
+  *.*)
+    if [ -r "$1" ]; then
+      FILES="$1 $FILES"
+      FILES_FLAG=$((FILES_FLAG | 2))
+    else
+      echo "ERROR: $1 file can't be read"
+      exit 1
+    fi
+    shift
+    ;;
+  -*)
+    echo "ERROR: $1 is the wrong FILTER"
+    exit 1
+    ;;
+  *)
+    echo "ERROR: $1 is the wrong COMMAND"
+    exit 1
+    ;;
+  esac
+done
+#Manage INPUT files
+case "$FILES_FLAG" in
+00)
+  INPUT="cat -"
+  ;;
+1)
+  INPUT="gzip -d -c $FILES_GZ | cat -"
+  ;;
+2)
+  INPUT="cat $FILES"
+  ;;
+3)
+  INPUT="gzip -d -c $FILES_GZ | cat $FILES -"
+  ;;
+esac
+#Filter logs
+FILTER=$(eval "$INPUT" |
+  awk \
+    -v TICKER_FLAG="$TICKER_FLAG" \
+    -v DATETIME_A_FLAG="$DATETIME_A_FLAG" \
+    -v DATETIME_B_FLAG="$DATETIME_B_FLAG" \
+    -v TICKER="$TICKER" \
+    -v DATETIME_A="$DATETIME_A" \
+    -v DATETIME_B="$DATETIME_B" \
+    'BEGIN{FS=";"}
+       {
+        if(DATETIME_B_FLAG==0 && DATETIME_A_FLAG==0 && TICKER_FLAG==0) {print}
+        if(DATETIME_B_FLAG==1){if ($1<DATETIME_B){print}}
+        if(DATETIME_A_FLAG==1){if ($1>DATETIME_A){print}}
+        if(TICKER_FLAG==1){{split(TICKER,ticker,"/")};
+        for (i in ticker)
+        if(ticker[i]==$2) {print}
+        }
+        }
+        ')
+#COMMANDS
+LIST_TICK=$(echo "$FILTER" |
+  awk \
+    'BEGIN{FS=";"}{print $2}' | sort | uniq)
+PROFIT=$(echo "$FILTER" |
+  awk \
+    'BEGIN{FS=";"}
+         {if($3=="sell"){SUM=SUM+$4*$6}else{if($3=="buy"){SUM-=$4*$6}}}
+         END{printf("%.2f", SUM) }')
+POS=$(echo "$FILTER" |
+  awk \
+    'BEGIN{FS=";"}
+      {if ($3=="sell")
+        {amount_array[$2]-=$6
+         price_array[$2]=$4
+        }
+      else
+        {amount_array[$2]+=$6
+         price_array[$2]=$4
+      }
+      max_length=0
+      for (i in amount_array)
+        {tmp=sprintf("%.2f",amount_array[i]*price_array[i])
+         if(length(tmp)>max_length)
+          {max_length=length(tmp)}
+        }
+      }
+      END{
+          for (i in amount_array)
+          {printf("%-10s: %*.2f\n", i, max_length, amount_array[i]*price_array[i])}
+          }' | sort -gr -k 3)
+LAST_PRICE=$(echo "$FILTER" |
+  awk \
+    'BEGIN{FS=";"}
+            {price_array[$2]=$4
+             max_length=0
+             for (i in price_array)
+              {tmp=sprintf("%.2f",price_array[i])
+              if(length(tmp)>max_length)
+                {max_length=length(tmp)}
+              }
+            }
+            END{
+            for (i in price_array)
+              {
+              printf("%-10s: %*.2f\n", i, max_length, price_array[i])
+              }
+            }' | sort)
+HIST_ORD=$(echo "$FILTER" |
+  awk \
+    -v WIDTH="$WIDTH" \
+    -v WIDTH_FLAG="$WIDTH_FLAG" \
+    'BEGIN{FS=";"}
+          {times_array[$2]+=1}
+          {max_value=0
+           for(i in times_array)
+             {if(times_array[i]>max_value){max_value=times_array[i]}}
+           if(WIDTH_FLAG==1)
+             {division_value=max_value/WIDTH}
+           else
+             {division_value=1}
+          }
+          END{
+          for (i in times_array)
+            {
+            printf("%-10s: ", i)
+            for(j=0; j<int(times_array[i]/division_value);j++)
+              {printf("#")}
+               printf("\n")
+            }
+        }' | sort)
+GRAPH_POS=$(echo "$FILTER" |
+  awk \
+    -v WIDTH="$WIDTH" \
+    -v WIDTH_FLAG="$WIDTH_FLAG" \
+    'BEGIN{FS=";"}
+           {if ($3=="sell")
+              {amount_array[$2]-=$6
+               price_array[$2]=$4
+              }
+            else
+              {amount_array[$2]+=$6
+              price_array[$2]=$4
+              }
+            max_value=0
+            for(i in amount_array)
+              {tmp=sqrt((amount_array[i]*price_array[i])^2)
+               if(tmp>max_value){max_value=tmp}
+              }
+            if(WIDTH_FLAG==1)
+              {division_value=max_value/WIDTH}
+              else
+              {division_value=1000}
+            }
+            END{
+            for (i in amount_array)
+              {
+              printf("%-10s:", i)
+              if(int(sqrt((amount_array[i]*price_array[i])^2)/division_value)!=0)
+              {printf(" ")}
+              for(j=0; j<int(sqrt((amount_array[i]*price_array[i])^2)/division_value);j++)
+                {
+                if (amount_array[i]*price_array[i]>0)
+                  printf("#")
+                  else
+                  printf("!")
+                }
+                printf("\n")
+              }
+            }
+           ' | sort)
+#manage command
+case $COMMAND in
+list-tick)
+  echo "$LIST_TICK"
+  ;;
+profit)
+  echo "$PROFIT"
+  ;;
+pos)
+  echo "$POS"
+  ;;
+last-price)
+  echo "$LAST_PRICE"
+  ;;
+hist-ord)
+  echo "$HIST_ORD"
+  ;;
+graph-pos)
+  echo "$GRAPH_POS"
+  ;;
+"")
+  echo "$FILTER"
+  ;;
+esac
